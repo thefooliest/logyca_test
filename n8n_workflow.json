@@ -1,0 +1,216 @@
+{
+  "name": "Sales Daily Summary",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {}
+          ]
+        }
+      },
+      "id": "a31303f9-51a7-44d2-b358-dd52051a0cd9",
+      "name": "Cron - Midnight",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -656,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id FROM jobs \nWHERE status IN ('COMPLETED', 'COMPLETED_WITH_ERRORS')",
+        "options": {}
+      },
+      "id": "9bc1133a-ceaf-48b5-810f-3d7541e9cb93",
+      "name": "Get Completed Jobs",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        -448,
+        112
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "WfGFrwrIgI04Krk0",
+          "name": "Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $input.length >0}}",
+              "operation": "isNotEmpty"
+            }
+          ]
+        }
+      },
+      "id": "e97a8c0e-83c8-4ccd-9b4c-a9ba3b175c6d",
+      "name": "Has Completed Jobs?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        -224,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n    TO_CHAR(date, 'YYYY-MM-DD') AS date,\n    SUM(total) AS total_ventas \nFROM sales \nWHERE job_id IN (\n    SELECT id FROM jobs \n    WHERE status IN ('COMPLETED', 'COMPLETED_WITH_ERRORS')\n)\nGROUP BY date \nORDER BY date",
+        "options": {}
+      },
+      "id": "40168769-70ed-4204-8499-6ed66497a532",
+      "name": "Calculate Daily Totals",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        0,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "WfGFrwrIgI04Krk0",
+          "name": "Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO sales_daily_summary (date, total_ventas, created_at, updated_at) VALUES ('{{ $json.date }}', {{ $json.total_ventas }}, NOW(), NOW()) ON CONFLICT (date) DO UPDATE SET total_ventas = EXCLUDED.total_ventas, updated_at = NOW();",
+        "options": {}
+      },
+      "id": "084513e3-e041-40aa-9ef8-49d96fef4d0e",
+      "name": "Upsert Daily Summary",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        224,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "WfGFrwrIgI04Krk0",
+          "name": "Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT create_partition_for_date((CURRENT_DATE + INTERVAL '1 day')::date);",
+        "options": {}
+      },
+      "id": "3edfa10f-ee87-4931-8bb9-9504bf885937",
+      "name": "Create Next Day Partition",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        224,
+        208
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "WfGFrwrIgI04Krk0",
+          "name": "Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "fc4634f0-ea6b-4167-a7b7-efa29c6fe29a",
+      "name": "No Jobs - Skip",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        0,
+        224
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Cron - Midnight": {
+      "main": [
+        [
+          {
+            "node": "Get Completed Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Completed Jobs": {
+      "main": [
+        [
+          {
+            "node": "Has Completed Jobs?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Completed Jobs?": {
+      "main": [
+        [
+          {
+            "node": "Calculate Daily Totals",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Jobs - Skip",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate Daily Totals": {
+      "main": [
+        [
+          {
+            "node": "Upsert Daily Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Daily Summary": {
+      "main": [
+        [
+          {
+            "node": "Create Next Day Partition",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "86087757-4597-4424-8366-885666d2d57f",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "4951a78711686ac5558a322f06f293058c26e3d212e649865cbb70ec9ebfd5c4"
+  },
+  "id": "0vjfW96Qt5G8HJMi",
+  "tags": []
+}

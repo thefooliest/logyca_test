@@ -130,13 +130,7 @@ docker compose up --scale worker=3
 
 ## Ejecutar las pruebas
 
-### Requisitos previos para tests
 
-Las pruebas de integración requieren que `postgres_test` esté corriendo. La forma más simple es levantar solo ese servicio:
-
-```bash
-docker compose up postgres_test -d
-```
 
 ### Instalar dependencias de desarrollo
 
@@ -158,11 +152,6 @@ Los tests unitarios no requieren ninguna dependencia externa:
 pytest tests/test_validate.py -v
 ```
 
-### Correr solo los tests de integración
-
-```bash
-pytest tests/test_repository.py tests/test_routes.py -v
-```
 
 ### Correr con reporte de cobertura
 
@@ -176,12 +165,12 @@ pytest --cov=. --cov-report=term-missing
 
 ### Requisitos previos
 
-- n8n corriendo localmente o en la nube
+- n8n corriendo localmente 
 - Acceso a la misma base de datos PostgreSQL
-
+Ambas condiciones se cumple al ejecutar "docker compose up --build"
 ### Importar el workflow
 
-1. Abre n8n
+1. Abre n8n (http://localhost:5678/)
 2. Ve a **Workflows → Import from file**
 3. Selecciona el archivo `n8n_workflow.json`
 
@@ -238,8 +227,6 @@ logyca_test/
 ├── tests/
 │   ├── conftest.py              # Fixtures de pytest
 │   ├── test_validate.py         # Tests unitarios de validación
-│   ├── test_repository.py       # Tests de integración del repository
-│   └── test_routes.py           # Tests de integración de la API
 ├── sample.csv                   # CSV de ejemplo para pruebas
 ├── n8n_workflow.json            # Export del workflow de n8n
 ├── docker-compose.yml
