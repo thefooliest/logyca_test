@@ -1,4 +1,8 @@
-# Decisiones Arquitectónicas — Sistema de Procesamiento de Ventas CSV
+# Sistema de Procesamiento de Ventas CSV
+
+## Cómo levantar el sistema y probarlo 
+
+Las instrucciones detalladas para la configuración, levantamiento y pruebas del sistema están [aquí](https://github.com/thefooliest/logyca_test/blob/main/RUNNING.md) 
 
 ## Arquitectura General
 
