@@ -156,45 +156,165 @@ project/
 
 ---
 
-## Modelo de Datos
+# Diagramas de Arquitectura
 
-### `jobs`
-| columna | tipo | notas |
-|---|---|---|
-| id | UUID | PK |
-| status | ENUM | PENDING, PROCESSING, COMPLETED, COMPLETED_WITH_ERRORS, FAILED |
-| blob_name | TEXT | nombre del archivo en Blob Storage |
-| last_processed_chunk | INTEGER | checkpointing para idempotencia |
-| created_at | TIMESTAMP | |
-| updated_at | TIMESTAMP | |
+## Diagrama 1 — Arquitectura General (C4 Contenedores)
 
-### `sales` (particionada por date)
-| columna | tipo | notas |
-|---|---|---|
-| id | SERIAL | |
-| date | DATE | NOT NULL |
-| product_id | INTEGER | NOT NULL |
-| quantity | INTEGER | NOT NULL, CHECK > 0 |
-| price | NUMERIC | NOT NULL, CHECK > 0 |
-| total | NUMERIC | GENERATED ALWAYS AS (quantity * price) |
-| job_id | UUID | FK a jobs |
+```mermaid
+C4Container
+    title Sistema de Procesamiento de Ventas CSV
 
-### `processing_errors`
-| columna | tipo | notas |
-|---|---|---|
-| id | SERIAL | |
-| job_id | UUID | FK a jobs |
-| row_number | INTEGER | |
-| raw_content | TEXT | contenido crudo de la fila |
-| error_reason | TEXT | |
-| created_at | TIMESTAMP | |
+    Person(cliente, "Cliente", "Sube archivos CSV de ventas")
 
-### `sales_daily_summary`
-| columna | tipo | notas |
-|---|---|---|
-| id | SERIAL | |
-| date | DATE | |
-| total_ventas | NUMERIC | |
-| created_at | TIMESTAMP | |
+    System_Boundary(sistema, "Sales CSV Processor") {
+        Container(api, "API", "FastAPI / Python", "Recibe uploads, gestiona jobs, expone estado")
+        Container(worker, "Worker", "Python / asyncio", "Procesa archivos CSV de forma asíncrona")
+        Container(n8n, "n8n", "Workflow Engine", "Calcula resúmenes diarios de ventas")
+    }
 
-Más de talles sobre el modelo de datos se encuentra en db/migrations en este proyecto
+    System_Ext(blob, "Azure Blob Storage", "Almacena archivos CSV subidos")
+    System_Ext(queue, "Azure Queue Storage", "Cola de mensajes de procesamiento")
+    ContainerDb(postgres, "PostgreSQL", "Base de datos", "jobs, sales, errors, daily summary")
+
+    Rel(cliente, api, "POST /upload, GET /job/{id}", "HTTP")
+    Rel(api, blob, "Sube archivo CSV", "HTTPS / Azure SDK")
+    Rel(api, queue, "Publica mensaje", "HTTPS / Azure SDK")
+    Rel(api, postgres, "Crea y consulta jobs", "SQL / asyncpg")
+
+    Rel(worker, queue, "Consume mensajes", "HTTPS / Azure SDK")
+    Rel(worker, blob, "Descarga CSV en streaming", "HTTPS / Azure SDK")
+    Rel(worker, postgres, "Inserta ventas, actualiza jobs", "SQL / asyncpg")
+
+    Rel(n8n, postgres, "Consulta jobs, guarda resúmenes", "SQL")
+```
+
+---
+
+## Diagrama 2 — Flujo de Secuencia del Upload
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Cliente
+    participant API
+    participant Blob as Azure Blob Storage
+    participant Queue as Azure Queue
+    participant DB as PostgreSQL
+    participant Worker
+
+    Cliente->>API: POST /upload (CSV file)
+
+    API->>Blob: upload_blob(blob_name, stream)
+    alt Falla upload a Blob
+        Blob-->>API: Exception
+        API-->>Cliente: 500 - Failed to upload file to storage
+    end
+    Blob-->>API: OK
+
+    API->>DB: INSERT INTO jobs (PENDING)
+    alt Falla creación de job
+        DB-->>API: Exception
+        API-->>Cliente: 500 - Failed to create job
+    end
+    DB-->>API: job_id
+
+    API->>Queue: send_message(job_id, blob_name)
+    alt Falla envío a cola
+        Queue-->>API: Exception
+        API->>DB: UPDATE jobs SET status = FAILED
+        API-->>Cliente: 500 - Failed to queue processing job
+    end
+    Queue-->>API: OK
+
+    API-->>Cliente: 202 - { job_id, status: PENDING }
+
+    Note over Worker,DB: Procesamiento asíncrono
+
+    Worker->>Queue: receive_message(visibility_timeout=1800s)
+    Queue-->>Worker: message(job_id, blob_name)
+
+    Worker->>DB: UPDATE jobs SET status = PROCESSING
+    Worker->>Blob: download_blob(offset=last_processed_byte)
+    Blob-->>Worker: stream
+
+    loop Por cada chunk de 5MB
+        Worker->>Worker: Parsear CSV, validar con pandas
+        Worker->>DB: BEGIN TRANSACTION
+        Worker->>DB: COPY records INTO sales
+        Worker->>DB: UPDATE jobs SET last_processed_byte = N
+        Worker->>DB: COMMIT
+        alt Chunk con filas inválidas
+            Worker->>DB: INSERT INTO processing_errors
+        end
+    end
+
+    alt Procesamiento exitoso
+        Worker->>DB: UPDATE jobs SET status = COMPLETED
+        Worker->>Queue: delete_message
+    else Procesamiento fallido
+        Worker->>DB: UPDATE jobs SET status = FAILED
+        Note over Queue: Mensaje reaparece tras visibility timeout
+    end
+
+    Cliente->>API: GET /job/{job_id}
+    API->>DB: SELECT * FROM jobs WHERE id = job_id
+    DB-->>API: job row
+    API-->>Cliente: 200 - { job_id, status, created_at, updated_at }
+```
+
+---
+
+## Diagrama 3 — Modelo de Datos
+
+```mermaid
+erDiagram
+    jobs {
+        UUID id PK
+        job_status status "PENDING | PROCESSING | COMPLETED | COMPLETED_WITH_ERRORS | FAILED"
+        TEXT blob_name
+        BIGINT last_processed_byte "DEFAULT 0"
+        TIMESTAMP created_at
+        TIMESTAMP updated_at
+    }
+
+    sales {
+        SERIAL id
+        DATE date "NOT NULL"
+        INTEGER product_id "NOT NULL"
+        INTEGER quantity "NOT NULL, CHECK > 0"
+        NUMERIC price "NOT NULL, CHECK > 0"
+        NUMERIC total "GENERATED AS quantity * price"
+        UUID job_id FK
+    }
+
+    sales_default {
+        SERIAL id
+        DATE date
+        INTEGER product_id
+        INTEGER quantity
+        NUMERIC price
+        NUMERIC total
+        UUID job_id FK
+    }
+
+    processing_errors {
+        SERIAL id PK
+        UUID job_id FK
+        INTEGER row_number
+        TEXT raw_content
+        TEXT error_reason
+        TIMESTAMP created_at
+    }
+
+    sales_daily_summary {
+        SERIAL id PK
+        DATE date "UNIQUE"
+        NUMERIC total_ventas
+        TIMESTAMP created_at
+        TIMESTAMP updated_at
+    }
+
+    jobs ||--o{ sales : "job_id"
+    jobs ||--o{ sales_default : "job_id"
+    jobs ||--o{ processing_errors : "job_id"
+```
